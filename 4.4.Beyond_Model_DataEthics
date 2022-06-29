@@ -1,0 +1,153 @@
+import sqlite3
+import warnings
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from category_encoders import OneHotEncoder
+from IPython.display import VimeoVideo
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.utils.validation import check_is_fitted
+
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+%load_ext sql
+%sql sqlite:////home/jovyan/nepal.sqlite
+
+%%sql
+select *
+from household_demographics
+limit 5
+select count(*)
+from household_demographics
+SELECT h.*,
+    s.*,
+    d.damage_grade,
+    i.vdcmun_id
+    from id_map as i
+    join household_demographics as h on i.household_id = h.household_id
+    JOIN building_structure AS s ON i.building_id = s.building_id
+    JOIN building_damage AS d ON i.building_id = d.building_id
+    WHERE district_id = 3
+    limit 5
+
+def wrangle(db_path):
+    # Connect to database
+    conn = sqlite3.connect(db_path)
+
+    # Construct query
+    query = """
+        SELECT  h.*,
+                s.*,
+                d.damage_grade,
+                i.vdcmun_id
+        from id_map as i
+        join household_demographics as h on i.household_id = h.household_id
+        JOIN building_structure AS s ON i.building_id = s.building_id
+        JOIN building_damage AS d ON i.building_id = d.building_id
+        WHERE district_id = 4
+    """
+
+    # Read query results into DataFrame
+    df = pd.read_sql(query, conn, index_col="household_id")
+
+    # Identify leaky columns
+    drop_cols = [col for col in df.columns if "post_eq" in col]
+
+    # Add high-cardinality / redundant column
+    drop_cols.append("building_id")
+
+    # Create binary target column
+    df["damage_grade"] = df["damage_grade"].str[-1].astype(int)
+    df["severe_damage"] = (df["damage_grade"] > 3).astype(int)
+
+    # Drop old target
+    drop_cols.append("damage_grade")
+
+    # Drop multicollinearity column
+    drop_cols.append("count_floors_pre_eq")
+
+     #Group Caste Column
+    top_10 = df["caste_household"].value_counts().head(10).index
+    df["caste_household"] = df["caste_household"].apply(lambda c: c if c in top_10 else "other")
+    
+    # Drop columns
+    df.drop(columns=drop_cols, inplace=True)
+
+    return df
+
+df = wrangle("/home/jovyan/nepal.sqlite")
+df.head()
+
+# Check for high- and low-cardinality categorical features
+df.select_dtypes("object").nunique()
+
+target = "severe_damage"
+X = df.drop(columns = [target, "vdcmun_id"])
+y = df[target]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y , test_size = 0.2, random_state= 42
+)
+
+acc_baseline = y_train.value_counts(normalize=True).max()
+
+# Build Model
+model_lr = make_pipeline(
+    OneHotEncoder(use_cat_names = True), LogisticRegression(max_iter=3000)
+)
+# Fit model to training data
+model_lr.fit(X_train, y_train)
+
+acc_train = accuracy_score(y_train, model.predict(X_train))
+acc_test = accuracy_score(y_test, model_lr.predict(X_test))
+
+print("Training Accuracy:", round(acc_train, 2))
+print("Test Accuracy:", round(acc_test, 2))
+
+features = model.named_steps["onehotencoder"].get_feature_names()
+importances = model.named_steps["logisticregression"].coef_[0]
+feat_imp = pd.Series(np.exp(importances), index = features).sort_values()
+
+# Horizontal bar chart, five largest coefficients
+feat_imp.tail().plot(kind = "barh")
+plt.xlabel("Odds Ratio");
+feat_imp.head().plot(kind = "barh")
+plt.xlabel("Odds Ratio");
+
+# Plot line
+plt.plot(damage_by_vdcmun.values, color = "grey")
+plt.xticks(range(len(damage_by_vdcmun)), labels = damage_by_vdcmun.index)
+plt.yticks(np.arange(0.0, 1.1, 0.2))
+plt.xlabel("Municipality ID")
+plt.ylabel("% of Total Households")
+plt.title("Severe Damage by Municipality");
+
+damage_by_vdcmun = (
+    df.groupby("vdcmun_id")["severe_damage"].mean().sort_values(ascending= False)
+).to_frame()
+
+damage_by_vdcmun["Gurung"] = (
+    df[df["caste_household"]== "Gurung"].groupby("vdcmun_id")["severe_damage"].count()
+    /df.groupby("vdcmun_id")["severe_damage"].count()
+)
+
+damage_by_vdcmun["Kumal"] = (
+    df[df["caste_household"]== "Kumal"].groupby("vdcmun_id")["severe_damage"].count()
+    /df.groupby("vdcmun_id")["severe_damage"].count()
+).fillna(0)
+
+
+damage_by_vdcmun.drop(columns = "severe_damage").plot(
+    kind = "bar", stacked = True
+)
+plt.plot(damage_by_vdcmun["severe_damage"].values, color = "grey")
+plt.xticks(range(len(damage_by_vdcmun)), labels = damage_by_vdcmun.index)
+plt.yticks(np.arange(0.0, 1.1, 0.2))
+plt.xlabel("Municipality ID")
+plt.ylabel("% of Total Households")
+plt.title("Severe Damage by Municipality");
+plt.legend();

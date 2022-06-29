@@ -1,0 +1,135 @@
+import sqlite3
+import warnings
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from category_encoders import OneHotEncoder
+from IPython.display import VimeoVideo
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.utils.validation import check_is_fitted
+
+select distinct(district_id)
+from id_map
+
+select count(*)
+from id_map
+where district_id = 1
+
+select distinct(i.building_id) as b_id,
+s.*,
+d.damage_grade
+from id_map as i
+join building_structure as s on i.building_id = s.building_id
+join building_damage as d on i.building_id = d.building_id
+where district_id = 3
+
+# Build your `wrangle` function here
+def wrangle(db_path):
+    #connect to database
+    conn = sqlite3.connect(db_path)
+    
+    #query
+    query = """
+        select distinct(i.building_id) as b_id,
+        s.*,
+        d.damage_grade
+        from id_map as i
+        join building_structure as s on i.building_id = s.building_id
+        join building_damage as d on i.building_id = d.building_id
+        where district_id = 3
+    """
+    df = pd.read_sql(query, conn, index_col = "b_id")
+    
+    #list of leaky columns
+    drop_cols = [col for col in df.columns if "post_eq" in col]
+    
+    #identify severe damaged buildings by creating binary target
+    df["damage_grade"]= df["damage_grade"].str[-1].astype(int)
+    df["severe_damage"]= (df["damage_grade"]>3).astype(int) 
+    
+    #drop damage_grade
+    drop_cols.append("damage_grade")
+    
+    #drop multicolliearlity column
+    drop_cols.append("count_floors_pre_eq")
+    
+    #drop high cordinality column
+    drop_cols.append("building_id")
+    
+    #drop columns
+    df.drop(columns = drop_cols, inplace=True)
+
+    return df
+
+df = wrangle("/home/jovyan/nepal.sqlite")
+df.head()
+
+# Plot value counts of `"severe_damage"`
+df["severe_damage"].value_counts(normalize = True).plot(
+    kind = "bar", xlabel = "Severe Damage", ylabel = "Relative Frequency", title = "Kavrepalanchok, Class Balance"
+)
+
+# Create boxplot
+sns.boxplot(x = "severe_damage", y = "plinth_area_sq_ft", data = df)
+# Label axes
+plt.xlabel("Severe Damage")
+plt.ylabel("Plinth Area [sq. ft.]")
+plt.title("Kavrepalanchok, Plinth Area vs Building Damage");
+
+roof_pivot = pd.pivot_table(
+    df, index = "roof_type", values = "severe_damage", aggfunc = np.mean
+).sort_values(by="severe_damage")
+
+target = "severe_damage"
+X = df.drop(columns = target)
+y = df[target]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y , test_size = 0.2, random_state= 42
+)
+
+print("X_train shape:", X_train.shape)
+print("y_train shape:", y_train.shape)
+print("X_test shape:", X_test.shape)
+print("y_test shape:", y_test.shape)
+
+acc_baseline = y_train.value_counts(normalize=True).max()
+
+model_lr = make_pipeline(
+    OneHotEncoder(use_cat_names=True),
+    LogisticRegression(max_iter= 1000)
+)
+model_lr.fit(X_train, y_train)
+
+lr_train_acc = accuracy_score(y_train, model_lr.predict(X_train))
+lr_val_acc = accuracy_score(y_val, model_lr.predict(X_val))
+
+print("Logistic Regression, Training Accuracy Score:", lr_train_acc)
+print("Logistic Regression, Validation Accuracy Score:", lr_val_acc)
+
+depth_hyperparams = range(1, 16)
+training_acc = []
+validation_acc = []
+for d in depth_hyperparams:
+    model_dt = make_pipeline(
+        OrdinalEncoder(),
+        DecisionTreeClassifier(max_depth=d, random_state = 42)
+    )
+    model_dt.fit(X_train, y_train)
+    dt_train_acc = accuracy_score(y_train, model_dt.predict(X_train))
+    dt_val_acc = accuracy_score(y_val, model_dt.predict(X_val))
+    training_acc.append(dt_train_acc)
+    validation_acc.append(dt_val_acc)
+
+# Plot `depth_hyperparams`, `training_acc`
+plt.plot(depth_hyperparams, training_acc, label = "Training")
+plt.plot(depth_hyperparams, validation_acc, label = "Validation")
+plt.xlabel("Max Depth")
+plt.ylabel("Accuracy Score")
+plt.title("Validation Curve, Decision Tree Model")
+plt.legend();
+

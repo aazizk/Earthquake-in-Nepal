@@ -1,0 +1,143 @@
+import sqlite3
+import warnings
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from category_encoders import OneHotEncoder
+from IPython.display import VimeoVideo
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.utils.validation import check_is_fitted
+
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+def wrangle(db_path):
+    # Connect to database
+    conn = sqlite3.connect(db_path)
+
+    # Construct query
+    query = """
+        SELECT distinct(i.building_id) AS b_id,
+           s.*,
+           d.damage_grade
+        FROM id_map AS i
+        JOIN building_structure AS s ON i.building_id = s.building_id
+        JOIN building_damage AS d ON i.building_id = d.building_id
+        WHERE district_id = 4
+    """
+
+    # Read query results into DataFrame
+    df = pd.read_sql(query, conn, index_col = "b_id")
+
+    #identify leaky columns
+    drop_cols= [col for col in df.columns if "post_eq" in col]
+
+    #identify severe damaged buildings by creating binary target
+    df["damage_grade"]= df["damage_grade"].str[-1].astype(int)
+    df["severe_damage"]= (df["damage_grade"]>3).astype(int) 
+    
+    #adding damage_grade in drop cols list
+    drop_cols.append("damage_grade")
+    
+    #drop multicolliearlity column
+    drop_cols.append("count_floors_pre_eq")
+
+    #drop high cordinality column
+    drop_cols.append("building_id")
+    
+    #drop columns
+    df.drop(columns = drop_cols, inplace = True) #dropping leaky columns
+    
+    return df
+
+df = wrangle("/home/jovyan/nepal.sqlite")
+df.head()
+
+drop_cols= []
+for col in df.columns:
+    if "post_eq" in col:
+        drop_cols.append(col)
+drop_cols
+
+drop_cols= [col for col in df.columns if "post_eq" in col]
+drop_cols
+
+# Create correlation matrix
+correlation = df.select_dtypes("number").drop(columns="severe_damage").corr()
+# Plot heatmap of `correlation`
+sns.heatmap(correlation);
+
+# Create boxplot
+sns.boxplot(x = "severe_damage", y = "height_ft_pre_eq", data = df)
+# Label axes
+plt.xlabel("Severe Damage")
+plt.ylabel("Height Pre-earthquake [ft.]")
+plt.title("Distribution of Building Height by class");
+
+# Plot value counts of `"severe_damage"`
+df["severe_damage"].value_counts(normalize = True).plot(
+    kind = "bar", xlabel = "Class", ylabel = "Relative Frequency", title = "Class"
+);
+
+majority_class_prop, minority_class_prop = df["severe_damage"].value_counts(normalize = True)
+
+# Create pivot table
+foundation_pivot = pd.pivot_table(
+    df, index = "foundation_type", values = "severe_damage", aggfunc = np.mean
+).sort_values(by="severe_damage")
+
+# Plot bar chart of `foundation_pivot`
+foundation_pivot.plot(kind = "barh")
+plt.axvline(
+    majority_class_prop, linestyle= "--", color = "red", label = "Majority Class"
+)
+plt.axvline(
+    minority_class_prop, linestyle= "--", color = "green", label = "Minority Class"
+);
+plt.legend(loc="lower right")
+
+target = "severe_damage"
+X = df.drop(columns = target)
+y = df[target]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y , test_size = 0.2, random_state= 42
+)
+
+print("X_train shape:", X_train.shape)
+print("y_train shape:", y_train.shape)
+print("X_test shape:", X_test.shape)
+print("y_test shape:", y_test.shape)
+
+acc_baseline = y_train.value_counts(normalize=True).max()
+
+# Build model
+model = make_pipeline(
+    OneHotEncoder(use_cat_names=True),
+    LogisticRegression(max_iter=1000)
+)
+# Fit model to training data
+model.fit(X_train, y_train)
+
+acc_train = accuracy_score(y_train, model.predict(X_train))
+acc_test = model.score(X_test, y_test)
+
+print("Training Accuracy:", round(acc_train, 2))
+print("Test Accuracy:", round(acc_test, 2))
+
+y_train_pred_proba = model.predict_proba(X_train)
+
+features = model.named_steps["onehotencoder"].get_feature_names()
+importances = model.named_steps["logisticregression"].coef_[0]
+
+odds_ratios = pd.Series(np.exp(importances), index = features).sort_values()
+
+# Horizontal bar chart, five largest coefficients
+odds_ratios.tail().plot(kind = "barh")
+plt.xlabel("Odds Ratio");
+odds_ratios.head().plot(kind = "barh")
+plt.xlabel("Odds Ratio");

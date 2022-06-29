@@ -1,0 +1,161 @@
+import sqlite3
+import warnings
+
+import matplotlib.pyplot as plt
+import pandas as pd
+from category_encoders import OrdinalEncoder
+from IPython.display import VimeoVideo
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.utils.validation import check_is_fitted
+
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+def wrangle(db_path):
+    # Connect to database
+    conn = sqlite3.connect(db_path)
+
+    # Construct query
+    query = """
+        SELECT distinct(i.building_id) AS b_id,
+           s.*,
+           d.damage_grade
+        FROM id_map AS i
+        JOIN building_structure AS s ON i.building_id = s.building_id
+        JOIN building_damage AS d ON i.building_id = d.building_id
+        WHERE district_id = 4
+    """
+
+    # Read query results into DataFrame
+    df = pd.read_sql(query, conn, index_col="b_id")
+
+    # Identify leaky columns
+    drop_cols = [col for col in df.columns if "post_eq" in col]
+
+    # Add high-cardinality / redundant column
+    drop_cols.append("building_id")
+
+    # Create binary target column
+    df["damage_grade"] = df["damage_grade"].str[-1].astype(int)
+    df["severe_damage"] = (df["damage_grade"] > 3).astype(int)
+
+    # Drop old target
+    drop_cols.append("damage_grade")
+
+    # Drop multicollinearity column
+    drop_cols.append("count_floors_pre_eq")
+
+    # Drop columns
+    df.drop(columns=drop_cols, inplace=True)
+
+    return df
+
+df = wrangle("/home/jovyan/nepal.sqlite")
+
+target = "severe_damage"
+X = df.drop(columns=target)
+y = df[target]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y , test_size = 0.2, random_state= 42
+)
+
+X_train, X_val, y_train, y_val = train_test_split(
+    X_train, y_train , test_size = 0.2, random_state= 42
+)
+
+acc_baseline = y_train.value_counts(normalize=True).max()
+
+# Build Model
+model = make_pipeline(
+    OrdinalEncoder(), DecisionTreeClassifier(random_state = 42)
+)
+# Fit model to training data
+model.fit(X_train, y_train)
+
+acc_train = accuracy_score(y_train, model.predict(X_train))
+acc_val = model.score(X_val, y_val)
+
+print("Training Accuracy:", round(acc_train, 2))
+print("Validation Accuracy:", round(acc_val, 2))
+
+tree_depth = model.named_steps["decisiontreeclassifier"].get_depth()
+
+depth_hyperparams = range(1,50,2)
+
+# Create empty lists for training and validation accuracy scores
+training_acc = []
+validation_acc = []
+
+for d in depth_hyperparams:
+    # Create model with `max_depth` of `d`
+    test_model = make_pipeline(
+        OrdinalEncoder(), 
+        DecisionTreeClassifier(max_depth=d, random_state = 42)
+    )
+    # Fit model to training data
+    test_model.fit(X_train, y_train)
+    # Calculate training accuracy score and append to `training_acc`
+    training_acc.append(test_model.score(X_train, y_train))
+    # Calculate validation accuracy score and append to `training_acc`
+    validation_acc.append(test_model.score(X_val, y_val))
+
+print("Training Accuracy Scores:", training_acc[:3])
+print("Validation Accuracy Scores:", validation_acc[:3])
+
+# Plot `depth_hyperparams`, `training_acc`
+plt.plot(depth_hyperparams, training_acc, label = "Training")
+plt.plot(depth_hyperparams, validation_acc, label = "Validation")
+plt.xlabel("Max Depth")
+plt.ylabel("Accuracy")
+plt.legend();
+
+# Build Model
+model = make_pipeline(
+    OrdinalEncoder(), DecisionTreeClassifier(max_depth=6, random_state = 42)
+)
+# Fit model to training data
+model.fit(X_train, y_train)
+
+acc_train = accuracy_score(y_train, model.predict(X_train))
+acc_val = model.score(X_val, y_val)
+
+print("Training Accuracy:", round(acc_train, 2))
+print("Validation Accuracy:", round(acc_val, 2))
+
+test_acc = model.score(X_test, y_test)
+
+# Create larger figure
+fig, ax = plt.subplots(figsize=(25, 12))
+# Plot tree
+plot_tree(
+    decision_tree=model.named_steps["decisiontreeclassifier"],
+    feature_names=X_train.columns,
+    filled=True,  # Color leaf with class
+    rounded=True,  # Round leaf edges
+    proportion=True,  # Display proportion of classes in leaf
+    max_depth=3,  # Only display first 3 levels
+    fontsize=12,  # Enlarge font
+    ax=ax,  # Place in figure axis
+);
+
+features = X_train.columns
+importances = model.named_steps["decisiontreeclassifier"].feature_importances_
+
+print("Features:", features[:3])
+print("Importances:", importances[:3])
+
+feat_imp = pd.Series(importances, index = features).sort_values()
+
+# Create horizontal bar chart
+# Horizontal bar chart, five largest coefficients
+#feat_imp.tail().plot(kind = "barh")
+#plt.xlabel("Feature Importance");
+feat_imp.head().plot(kind = "barh")
+plt.xlabel("Feature Importance");
+
+feat_imp.plot(kind = "barh")
+plt.xlabel("Gini Importance")
+plt.ylabel("Feature");

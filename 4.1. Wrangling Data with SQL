@@ -1,0 +1,52 @@
+import sqlite3
+
+import pandas as pd
+from IPython.display import VimeoVideo
+
+%load_ext sql
+%sql sqlite:////home/jovyan/nepal.sqlite
+
+%%sql
+SELECT * from sqlite_schema
+SELECT name from sqlite_schema where type = "table"
+select * from id_map limit 5
+select count(*) from id_map
+select distinct(district_id) from id_map
+select count(distinct(building_id)) from id_map
+select * from id_map where district_id = 4 limit 5
+select count(*) from id_map where district_id = 4
+select count(distinct(building_id)) as unique_building_Gorkha from id_map where district_id = 4
+select * from building_structure limit 5
+select count(*) from building_structure
+select * from id_map 
+join building_structure on id_map.building_id = building_structure.building_id
+where district_id = 4 limit 5
+
+%%sql
+select distinct(i.building_id), s.*
+from id_map as i
+join building_structure as s on i.building_id = s.building_id
+where district_id = 4 limit 5
+
+%%sql
+select distinct(i.building_id) as b_id, s.*, d.damage_grade
+from id_map as i
+join building_structure as s on i.building_id = s.building_id
+join building_damage as d on i.building_id = d.building_id
+where district_id = 4 limit 5
+
+conn = sqlite3.connect("/home/jovyan/nepal.sqlite")
+
+query = """
+
+select distinct(i.building_id) as b_id, s.*, d.damage_grade
+from id_map as i
+join building_structure as s on i.building_id = s.building_id
+join building_damage as d on i.building_id = d.building_id
+where district_id = 4
+"""
+print(query)
+
+df = pd.read_sql(query, conn, index_col = "b_id")
+
+df.head()
